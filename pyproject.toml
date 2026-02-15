@@ -1,0 +1,26 @@
+[project]
+name = "mlagents-mcp"
+version = "0.1.0"
+description = "MCP server for controlling Unity ML-Agents training runs from Claude Code"
+readme = "README.md"
+authors = [
+    { name = "limam-B", email = "73091373+limam-B@users.noreply.github.com" }
+]
+requires-python = ">=3.10"
+dependencies = [
+    "mcp[cli]>=1.0.0",
+    "pyyaml>=3.1.0",
+    "tensorboard>=2.14",
+]
+
+[project.scripts]
+mlagents-mcp = "mlagents_mcp.server:main"
+
+[build-system]
+requires = ["uv_build>=0.9.18,<0.10.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "ruff>=0.15.1",
+]

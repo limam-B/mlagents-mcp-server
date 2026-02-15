@@ -1,0 +1,31 @@
+# Python
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv/
+
+# uv
+.python-version
+
+# Ruff
+.ruff_cache/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Claude Code skill files (project-specific, contain local paths)
+claude-ml-agents-skills/
+
+# MCP config (contains local paths)
+.mcp.json
+
+# Training artifacts (if run from this dir)
+results/
