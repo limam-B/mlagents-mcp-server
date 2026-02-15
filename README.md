@@ -7,7 +7,7 @@ Launch, stop, resume, monitor, compare, and export ML-Agents training — all th
 ## Features
 
 - **Training control** — start, stop, resume runs as background processes
-- **Blocking waits** — tools that block until a condition is met (no sleep/poll loops needed)
+- **Instant checks** — check training progress without blocking the conversation
 - **Live monitoring** — read TensorBoard metrics, reward curves, and training logs in real time
 - **Run comparison** — compare metrics across runs for hyperparameter tuning
 - **Config management** — read and deep-merge update YAML training configs
@@ -138,7 +138,7 @@ The server reads its configuration from environment variables. Add them to your 
 | `check_completion` | Instant | Check if training finished. Returns current status and progress. |
 | `check_checkpoint` | Instant | Check if new .onnx files appeared. Returns checkpoint list. |
 
-The `check_*` tools are **non-blocking by default** — they return instantly with current state. Set `block=True` to wait (use sparingly, freezes the conversation).
+The `check_*` tools **always return instantly** — they never block the conversation.
 
 ## Two training modes
 
