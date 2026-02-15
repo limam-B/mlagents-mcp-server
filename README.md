@@ -128,17 +128,17 @@ The server reads its configuration from environment variables. Add them to your 
 | `get_config` | Read a YAML training config. |
 | `update_config` | Deep-merge updates into a config (only specified keys change). |
 
-### Blocking waits
+### Wait & check
 
-These tools block until a condition is met, eliminating the need for sleep/poll loops in your AI workflows:
+| Tool | Default | Description |
+|------|---------|-------------|
+| `wait_for_first_metrics` | Blocks | Blocks until first TensorBoard data point appears (~1-2 min). |
+| `check_step` | Instant | Check if training reached a target step. Returns current progress. |
+| `check_reward` | Instant | Check if mean reward reached a target. Returns current reward. |
+| `check_completion` | Instant | Check if training finished. Returns current status and progress. |
+| `check_checkpoint` | Instant | Check if new .onnx files appeared. Returns checkpoint list. |
 
-| Tool | Blocks until... |
-|------|-----------------|
-| `wait_for_first_metrics` | First TensorBoard data point appears. |
-| `wait_for_step` | Training reaches a target step count. |
-| `wait_for_reward` | Mean reward hits a threshold. |
-| `wait_for_completion` | Run finishes (completed/failed/stopped). |
-| `wait_for_checkpoint` | A new .onnx file appears on disk. |
+The `check_*` tools are **non-blocking by default** — they return instantly with current state. Set `block=True` to wait (use sparingly, freezes the conversation).
 
 ## Two training modes
 
@@ -173,13 +173,13 @@ A typical automated training session:
 ```
 1. force_training(config, run_id, ...)     # launch, blocks until ready
 2. wait_for_first_metrics(run_id)          # blocks until data flowing
-3. wait_for_step(run_id, 500000)           # blocks until milestone
-4. get_metrics(run_id)                     # check reward curve
-5. wait_for_completion(run_id)             # blocks until done
+3. check_step(run_id, 500000)              # instant: returns current progress
+4. get_training_logs(run_id)               # quick: live stdout peek
+5. check_completion(run_id)                # instant: is it done yet?
 6. export_model(run_id)                    # find the .onnx file
 ```
 
-No `bash sleep`. No retry loops. Each call blocks and returns when ready.
+Steps 1-2 block briefly during startup. Steps 3-5 are instant — call them whenever you want an update without freezing the conversation.
 
 ## Development
 
