@@ -15,6 +15,50 @@ CONDA_SETUP = (
 )
 
 
+def _find_child_pids(parent_pid: int) -> list[int]:
+    """Find all direct child PIDs of a process using /proc."""
+    children = []
+    try:
+        for entry in Path("/proc").iterdir():
+            if not entry.name.isdigit():
+                continue
+            try:
+                stat = (entry / "stat").read_text()
+                # Format: pid (comm) state ppid ...
+                parts = stat.split(") ", 1)
+                if len(parts) < 2:
+                    continue
+                fields = parts[1].split()
+                ppid = int(fields[1])  # ppid is 4th field, index 1 after split
+                if ppid == parent_pid:
+                    children.append(int(entry.name))
+            except (OSError, ValueError, IndexError):
+                continue
+    except OSError:
+        pass
+    return children
+
+
+def _find_mlagents_pid(shell_pid: int) -> int | None:
+    """Walk the process tree from the shell to find the mlagents-learn process."""
+    visited = set()
+    queue = [shell_pid]
+    while queue:
+        pid = queue.pop(0)
+        if pid in visited:
+            continue
+        visited.add(pid)
+        # Check if this PID is mlagents-learn
+        try:
+            cmdline = (Path("/proc") / str(pid) / "cmdline").read_bytes()
+            if b"mlagents-learn" in cmdline:
+                return pid
+        except OSError:
+            continue
+        queue.extend(_find_child_pids(pid))
+    return None
+
+
 class ProcessManager:
     def __init__(
         self,
@@ -103,7 +147,7 @@ class ProcessManager:
             stderr=subprocess.STDOUT,
             cwd=str(self._project_root),
             text=True,
-            # setsid so we can signal the whole process group
+            # setsid so we can signal the whole process group for cleanup
             preexec_fn=os.setsid,
         )
 
@@ -155,18 +199,54 @@ class ProcessManager:
             return False
 
         proc = info.process
-        pgid = os.getpgid(proc.pid)
-        # Graceful: SIGINT to the process group (reaches mlagents-learn, not just the shell)
-        os.killpg(pgid, signal.SIGINT)
+
+        # Find the actual mlagents-learn PID (proc.pid is the bash shell)
+        ml_pid = _find_mlagents_pid(proc.pid)
+
+        # Step 1: Send SIGINT to mlagents-learn directly (it handles graceful shutdown)
+        target_pid = ml_pid or proc.pid
+        try:
+            os.kill(target_pid, signal.SIGINT)
+        except ProcessLookupError:
+            self._registry.update_status(run_id, RunStatus.STOPPED, proc.returncode)
+            return True
+
         try:
             proc.wait(timeout=timeout)
+            self._registry.update_status(run_id, RunStatus.STOPPED, proc.returncode)
+            return True
         except subprocess.TimeoutExpired:
+            pass
+
+        # Step 2: SIGINT didn't finish in time — SIGTERM the process group
+        try:
+            pgid = os.getpgid(proc.pid)
             os.killpg(pgid, signal.SIGTERM)
+        except (ProcessLookupError, OSError):
+            pass
+
+        try:
+            proc.wait(timeout=5)
+            self._registry.update_status(run_id, RunStatus.STOPPED, proc.returncode)
+            return True
+        except subprocess.TimeoutExpired:
+            pass
+
+        # Step 3: Still stuck — SIGKILL the entire process group
+        try:
+            pgid = os.getpgid(proc.pid)
+            os.killpg(pgid, signal.SIGKILL)
+        except (ProcessLookupError, OSError):
+            pass
+
+        try:
+            proc.wait(timeout=3)
+        except subprocess.TimeoutExpired:
+            proc.kill()
             try:
-                proc.wait(timeout=5)
+                proc.wait(timeout=3)
             except subprocess.TimeoutExpired:
-                os.killpg(pgid, signal.SIGKILL)
-                proc.wait()
+                pass
 
         self._registry.update_status(run_id, RunStatus.STOPPED, proc.returncode)
         return True
