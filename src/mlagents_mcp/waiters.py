@@ -51,6 +51,24 @@ def _timeout_result(run_id: str, timeout: float, what: str) -> dict[str, Any]:
     }
 
 
+def _get_current_progress(
+    results_dir: Path,
+    run_id: str,
+    last_n: int = 5,
+) -> tuple[list[Any], int, float]:
+    """Read current reward points. Returns (points, current_step, current_reward)."""
+    metrics = metrics_reader.read_metrics(
+        results_dir,
+        run_id,
+        metric_keys=["Environment/Cumulative Reward"],
+        last_n=last_n,
+    )
+    reward_points = metrics.get("Environment/Cumulative Reward", [])
+    if reward_points:
+        return reward_points, reward_points[-1].step, reward_points[-1].value
+    return [], 0, 0.0
+
+
 # ── Short-lived blockers (always block — used during startup) ──────────
 
 
@@ -157,25 +175,7 @@ def wait_for_first_metrics(
     return _timeout_result(run_id, timeout, "first metrics")
 
 
-# ── Non-blocking by default (check once, return current state) ─────────
-
-
-def _get_current_progress(
-    results_dir: Path,
-    run_id: str,
-    last_n: int = 5,
-) -> tuple[list[Any], int, float]:
-    """Read current reward points. Returns (points, current_step, current_reward)."""
-    metrics = metrics_reader.read_metrics(
-        results_dir,
-        run_id,
-        metric_keys=["Environment/Cumulative Reward"],
-        last_n=last_n,
-    )
-    reward_points = metrics.get("Environment/Cumulative Reward", [])
-    if reward_points:
-        return reward_points, reward_points[-1].step, reward_points[-1].value
-    return [], 0, 0.0
+# ── Instant checks (never block) ──────────────────────────────────────
 
 
 def check_step(
@@ -183,66 +183,32 @@ def check_step(
     results_dir: Path,
     run_id: str,
     target_step: int,
-    block: bool = False,
-    timeout: float = 3600.0,
-    poll_interval: float = 15.0,
 ) -> dict[str, Any]:
-    """Check if training reached the target step count.
-
-    Non-blocking by default: checks once and returns current progress.
-    Set block=True to wait until the target is reached.
-    """
+    """Check once if training reached the target step count. Returns instantly."""
     err = _check_run_exists(registry, run_id)
     if err:
         return err
 
-    deadline = time.monotonic() + timeout
+    died = _check_run_died(registry, run_id)
+    if died:
+        died["target_step"] = target_step
+        return died
 
-    while True:
-        info = registry.get(run_id)
-        if info and info.status in (RunStatus.FAILED, RunStatus.STOPPED):
-            died = _check_run_died(registry, run_id)
-            if died:
-                died["target_step"] = target_step
-                return died
+    reward_points, current_step, current_reward = _get_current_progress(
+        results_dir, run_id
+    )
 
-        reward_points, current_step, current_reward = _get_current_progress(
-            results_dir, run_id
-        )
-
-        reached = current_step >= target_step if current_step > 0 else False
-
-        if reached or not block:
-            return {
-                "run_id": run_id,
-                "reached": reached,
-                "target_step": target_step,
-                "current_step": current_step,
-                "current_reward": round(current_reward, 4),
-                "reward_trend": [
-                    {"step": p.step, "value": round(p.value, 4)} for p in reward_points
-                ],
-                "status": _run_status_info(registry, run_id),
-            }
-
-        # Completed but didn't reach target
-        if info and info.status == RunStatus.COMPLETED:
-            return {
-                "run_id": run_id,
-                "reached": False,
-                "target_step": target_step,
-                "current_step": current_step,
-                "message": "Training completed before reaching target step.",
-                "status": "completed",
-            }
-
-        if time.monotonic() >= deadline:
-            result = _timeout_result(run_id, timeout, f"step {target_step}")
-            result["target_step"] = target_step
-            result["current_step"] = current_step
-            return result
-
-        time.sleep(poll_interval)
+    return {
+        "run_id": run_id,
+        "reached": current_step >= target_step if current_step > 0 else False,
+        "target_step": target_step,
+        "current_step": current_step,
+        "current_reward": round(current_reward, 4),
+        "reward_trend": [
+            {"step": p.step, "value": round(p.value, 4)} for p in reward_points
+        ],
+        "status": _run_status_info(registry, run_id),
+    }
 
 
 def check_reward(
@@ -250,207 +216,117 @@ def check_reward(
     results_dir: Path,
     run_id: str,
     target_reward: float,
-    block: bool = False,
-    timeout: float = 3600.0,
-    poll_interval: float = 15.0,
 ) -> dict[str, Any]:
-    """Check if mean reward reached the target threshold.
-
-    Non-blocking by default: checks once and returns current reward.
-    Set block=True to wait until the target is reached.
-    """
+    """Check once if mean reward reached the target threshold. Returns instantly."""
     err = _check_run_exists(registry, run_id)
     if err:
         return err
 
-    deadline = time.monotonic() + timeout
+    died = _check_run_died(registry, run_id)
+    if died:
+        died["target_reward"] = target_reward
+        return died
 
-    while True:
-        info = registry.get(run_id)
-        if info and info.status in (RunStatus.FAILED, RunStatus.STOPPED):
-            died = _check_run_died(registry, run_id)
-            if died:
-                died["target_reward"] = target_reward
-                return died
+    reward_points, current_step, current_reward = _get_current_progress(
+        results_dir, run_id
+    )
 
-        reward_points, current_step, current_reward = _get_current_progress(
-            results_dir, run_id
-        )
-
-        reached = current_reward >= target_reward if reward_points else False
-
-        if reached or not block:
-            return {
-                "run_id": run_id,
-                "reached": reached,
-                "target_reward": target_reward,
-                "current_step": current_step,
-                "current_reward": round(current_reward, 4),
-                "reward_trend": [
-                    {"step": p.step, "value": round(p.value, 4)} for p in reward_points
-                ],
-                "status": _run_status_info(registry, run_id),
-            }
-
-        if info and info.status == RunStatus.COMPLETED:
-            return {
-                "run_id": run_id,
-                "reached": False,
-                "target_reward": target_reward,
-                "current_reward": round(current_reward, 4),
-                "message": "Training completed without reaching target reward.",
-                "status": "completed",
-            }
-
-        if time.monotonic() >= deadline:
-            result = _timeout_result(run_id, timeout, f"reward {target_reward}")
-            result["target_reward"] = target_reward
-            result["current_reward"] = round(current_reward, 4)
-            return result
-
-        time.sleep(poll_interval)
+    return {
+        "run_id": run_id,
+        "reached": current_reward >= target_reward if reward_points else False,
+        "target_reward": target_reward,
+        "current_step": current_step,
+        "current_reward": round(current_reward, 4),
+        "reward_trend": [
+            {"step": p.step, "value": round(p.value, 4)} for p in reward_points
+        ],
+        "status": _run_status_info(registry, run_id),
+    }
 
 
 def check_completion(
     registry: RunRegistry,
     results_dir: Path,
     run_id: str,
-    block: bool = False,
-    timeout: float = 7200.0,
-    poll_interval: float = 10.0,
 ) -> dict[str, Any]:
-    """Check if training has finished.
-
-    Non-blocking by default: returns current status and progress immediately.
-    Set block=True to wait until the run finishes.
-    """
+    """Check once if training has finished. Returns instantly."""
     err = _check_run_exists(registry, run_id)
     if err:
         return err
 
-    deadline = time.monotonic() + timeout
+    info = registry.get(run_id)
+    if not info:
+        return {"error": f"Run '{run_id}' not found."}
 
-    while True:
-        info = registry.get(run_id)
-        if not info:
-            return {"error": f"Run '{run_id}' not found."}
+    if info.status != RunStatus.RUNNING:
+        # Done — return final info
+        result: dict[str, Any] = {
+            "run_id": run_id,
+            "completed": True,
+            "status": info.status.value,
+            "return_code": info.return_code,
+        }
+        metrics = metrics_reader.read_metrics(
+            results_dir,
+            run_id,
+            metric_keys=["Environment/Cumulative Reward"],
+            last_n=5,
+        )
+        reward_points = metrics.get("Environment/Cumulative Reward", [])
+        if reward_points:
+            result["final_reward"] = round(reward_points[-1].value, 4)
+            result["final_step"] = reward_points[-1].step
+        result["last_logs"] = list(info.log_buffer)[-15:]
+        return result
 
-        is_done = info.status != RunStatus.RUNNING
-
-        if is_done:
-            result: dict[str, Any] = {
-                "run_id": run_id,
-                "completed": True,
-                "status": info.status.value,
-                "return_code": info.return_code,
-            }
-            metrics = metrics_reader.read_metrics(
-                results_dir,
-                run_id,
-                metric_keys=["Environment/Cumulative Reward"],
-                last_n=5,
-            )
-            reward_points = metrics.get("Environment/Cumulative Reward", [])
-            if reward_points:
-                result["final_reward"] = round(reward_points[-1].value, 4)
-                result["final_step"] = reward_points[-1].step
-            result["last_logs"] = list(info.log_buffer)[-15:]
-            return result
-
-        if not block:
-            # Not done yet — return current progress
-            reward_points, current_step, current_reward = _get_current_progress(
-                results_dir, run_id
-            )
-            return {
-                "run_id": run_id,
-                "completed": False,
-                "status": info.status.value,
-                "current_step": current_step,
-                "current_reward": round(current_reward, 4),
-                "reward_trend": [
-                    {"step": p.step, "value": round(p.value, 4)} for p in reward_points
-                ],
-            }
-
-        if time.monotonic() >= deadline:
-            result = _timeout_result(run_id, timeout, "completion")
-            result["status"] = info.status.value
-            reward_points, current_step, current_reward = _get_current_progress(
-                results_dir, run_id, last_n=1
-            )
-            if reward_points:
-                result["current_step"] = current_step
-                result["current_reward"] = round(current_reward, 4)
-            return result
-
-        time.sleep(poll_interval)
+    # Still running — return current progress
+    reward_points, current_step, current_reward = _get_current_progress(
+        results_dir, run_id
+    )
+    return {
+        "run_id": run_id,
+        "completed": False,
+        "status": info.status.value,
+        "current_step": current_step,
+        "current_reward": round(current_reward, 4),
+        "reward_trend": [
+            {"step": p.step, "value": round(p.value, 4)} for p in reward_points
+        ],
+    }
 
 
 def check_checkpoint(
     registry: RunRegistry,
     run_id: str,
     known_checkpoints: list[str] | None = None,
-    block: bool = False,
-    timeout: float = 600.0,
-    poll_interval: float = 10.0,
 ) -> dict[str, Any]:
-    """Check if new .onnx checkpoint files appeared on disk.
-
-    Non-blocking by default: compares current checkpoints against known_checkpoints
-    and returns any new ones immediately.
-    Set block=True to wait until a new checkpoint appears.
-
-    Args:
-        known_checkpoints: List of checkpoint paths already known. If omitted,
-            snapshots current files at call time (only useful with block=True).
-    """
+    """Check once if new .onnx checkpoint files appeared on disk. Returns instantly."""
     info = registry.get(run_id)
     if not info:
         return {"error": f"Run '{run_id}' not found."}
     if not info.results_dir:
         return {"error": f"No results directory for run '{run_id}'."}
 
-    if known_checkpoints is not None:
-        existing_onnx = set(known_checkpoints)
-    else:
-        existing_onnx = set(str(p) for p in info.results_dir.rglob("*.onnx"))
+    existing_onnx = set(known_checkpoints) if known_checkpoints else set()
+    current_onnx = set(str(p) for p in info.results_dir.rglob("*.onnx"))
+    new_files = current_onnx - existing_onnx
 
-    deadline = time.monotonic() + timeout
-
-    while True:
-        died = _check_run_died(registry, run_id)
-        if died:
-            return died
-
-        info = registry.get(run_id)
-        if not info or not info.results_dir:
-            return {"error": f"Run '{run_id}' not found."}
-
-        current_onnx = set(str(p) for p in info.results_dir.rglob("*.onnx"))
-        new_files = current_onnx - existing_onnx
-
-        if new_files or not block:
-            new_list = []
-            for f in sorted(new_files):
-                p = Path(f)
-                new_list.append(
-                    {
-                        "path": f,
-                        "behavior": p.parent.name,
-                        "size_mb": f"{p.stat().st_size / (1024 * 1024):.2f}",
-                    }
-                )
-            return {
-                "run_id": run_id,
-                "new_checkpoint": len(new_list) > 0,
-                "new_files": new_list,
-                "total_checkpoints": len(current_onnx),
-                "all_checkpoints": sorted(current_onnx),
-                "status": info.status.value,
+    new_list = []
+    for f in sorted(new_files):
+        p = Path(f)
+        new_list.append(
+            {
+                "path": f,
+                "behavior": p.parent.name,
+                "size_mb": f"{p.stat().st_size / (1024 * 1024):.2f}",
             }
+        )
 
-        if time.monotonic() >= deadline:
-            return _timeout_result(run_id, timeout, "new checkpoint")
-
-        time.sleep(poll_interval)
+    return {
+        "run_id": run_id,
+        "new_checkpoint": len(new_list) > 0,
+        "new_files": new_list,
+        "total_checkpoints": len(current_onnx),
+        "all_checkpoints": sorted(current_onnx),
+        "status": info.status.value,
+    }

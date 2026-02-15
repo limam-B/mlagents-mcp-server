@@ -532,36 +532,25 @@ def wait_for_first_metrics(
     )
 
 
-# Non-blocking by default — check current state instantly, optionally block
+# Instant checks — never block, always return immediately
 
 
 @mcp.tool()
 def check_step(
     run_id: str,
     target_step: int,
-    block: bool = False,
-    timeout: int = 3600,
-    poll_interval: int = 15,
 ) -> dict[str, Any]:
-    """Check if training reached a target step count. Returns current step, reward, and whether the target was reached.
-
-    NON-BLOCKING by default: returns instantly with current progress. Set block=True to wait (blocks the conversation until reached or timeout).
+    """Check if training reached a target step count. Always returns instantly with current step, reward, and whether the target was reached.
 
     Args:
         run_id: The run to check.
         target_step: The step count target.
-        block: If True, wait until target reached. If False (default), return current state immediately.
-        timeout: Max seconds to wait (only used when block=True).
-        poll_interval: Seconds between checks (only used when block=True).
     """
     return waiters.check_step(
         registry,
         RESULTS_DIR,
         run_id,
         target_step,
-        block=block,
-        timeout=float(timeout),
-        poll_interval=float(poll_interval),
     )
 
 
@@ -569,56 +558,34 @@ def check_step(
 def check_reward(
     run_id: str,
     target_reward: float,
-    block: bool = False,
-    timeout: int = 3600,
-    poll_interval: int = 15,
 ) -> dict[str, Any]:
-    """Check if mean cumulative reward reached a target threshold. Returns current reward, step, and whether the target was reached.
-
-    NON-BLOCKING by default: returns instantly. Set block=True to wait.
+    """Check if mean cumulative reward reached a target threshold. Always returns instantly with current reward, step, and whether the target was reached.
 
     Args:
         run_id: The run to check.
         target_reward: The reward threshold.
-        block: If True, wait until target reached. If False (default), return current state immediately.
-        timeout: Max seconds to wait (only used when block=True).
-        poll_interval: Seconds between checks (only used when block=True).
     """
     return waiters.check_reward(
         registry,
         RESULTS_DIR,
         run_id,
         target_reward,
-        block=block,
-        timeout=float(timeout),
-        poll_interval=float(poll_interval),
     )
 
 
 @mcp.tool()
 def check_completion(
     run_id: str,
-    block: bool = False,
-    timeout: int = 7200,
-    poll_interval: int = 10,
 ) -> dict[str, Any]:
-    """Check if a training run has finished. Returns current status and progress.
-
-    NON-BLOCKING by default: returns instantly with current step/reward/status. Set block=True to wait until the run finishes (blocks the conversation — use sparingly).
+    """Check if a training run has finished. Always returns instantly with current status, step, reward, and whether it completed.
 
     Args:
         run_id: The run to check.
-        block: If True, wait until run finishes. If False (default), return current state immediately.
-        timeout: Max seconds to wait (only used when block=True).
-        poll_interval: Seconds between checks (only used when block=True).
     """
     return waiters.check_completion(
         registry,
         RESULTS_DIR,
         run_id,
-        block=block,
-        timeout=float(timeout),
-        poll_interval=float(poll_interval),
     )
 
 
@@ -626,28 +593,17 @@ def check_completion(
 def check_checkpoint(
     run_id: str,
     known_checkpoints: list[str] | None = None,
-    block: bool = False,
-    timeout: int = 600,
-    poll_interval: int = 10,
 ) -> dict[str, Any]:
-    """Check if new .onnx checkpoint files appeared on disk. Returns list of all checkpoints and any new ones.
-
-    NON-BLOCKING by default: returns instantly with current checkpoint state. Set block=True to wait for a new one.
+    """Check if new .onnx checkpoint files appeared on disk. Always returns instantly with list of all checkpoints and any new ones.
 
     Args:
         run_id: The run to check.
-        known_checkpoints: List of checkpoint paths already known (from a previous call). New files = current minus these. If omitted, snapshots current files at call time.
-        block: If True, wait for a new checkpoint. If False (default), return current state immediately.
-        timeout: Max seconds to wait (only used when block=True).
-        poll_interval: Seconds between checks (only used when block=True).
+        known_checkpoints: List of checkpoint paths already known (from a previous call). New files = current minus these. If omitted, returns all checkpoints.
     """
     return waiters.check_checkpoint(
         registry,
         run_id,
         known_checkpoints=known_checkpoints,
-        block=block,
-        timeout=float(timeout),
-        poll_interval=float(poll_interval),
     )
 
 
