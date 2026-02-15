@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import concurrent.futures
 from pathlib import Path
 
 from .types import MetricPoint
@@ -12,6 +13,9 @@ DEFAULT_METRIC_KEYS = [
     "Policy/Learning Rate",
 ]
 
+# Timeout for EventAccumulator.Reload() — prevents hanging on large/live event files
+_RELOAD_TIMEOUT = 30.0
+
 
 def read_metrics(
     results_dir: Path,
@@ -21,8 +25,6 @@ def read_metrics(
     last_n: int | None = None,
 ) -> dict[str, list[MetricPoint]]:
     """Read TensorBoard scalars from event files for a given run."""
-    from tensorboard.backend.event_processing.event_accumulator import EventAccumulator
-
     run_dir = results_dir / run_id
     if not run_dir.is_dir():
         return {}
@@ -37,8 +39,28 @@ def read_metrics(
     if event_dir is None:
         return {}
 
+    return _read_from_event_dir(event_dir, metric_keys, last_n)
+
+
+def _read_from_event_dir(
+    event_dir: Path,
+    metric_keys: list[str] | None = None,
+    last_n: int | None = None,
+) -> dict[str, list[MetricPoint]]:
+    """Read metrics with a timeout to prevent hanging on large event files."""
+    from tensorboard.backend.event_processing.event_accumulator import (
+        EventAccumulator,
+    )
+
     acc = EventAccumulator(str(event_dir))
-    acc.Reload()
+
+    # Reload in a thread with timeout — this is what hangs on large/live files
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+        future = pool.submit(acc.Reload)
+        try:
+            future.result(timeout=_RELOAD_TIMEOUT)
+        except concurrent.futures.TimeoutError:
+            return {}
 
     keys = metric_keys or DEFAULT_METRIC_KEYS
     result: dict[str, list[MetricPoint]] = {}
