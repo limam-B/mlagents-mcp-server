@@ -232,6 +232,12 @@ def resume_training(
     )
 
 
+@mcp.tool()
+def cleanup_processes() -> dict[str, Any]:
+    """Kill orphaned mlagents-learn and Unity build processes that are not tracked by any active run. Use this when force_training fails due to leftover processes occupying ports, or after a crash."""
+    return process_mgr.cleanup_stale()
+
+
 # ── Monitoring ────────────────────────────────────────────────────────────
 
 
@@ -524,6 +530,31 @@ def wait_for_first_metrics(
         poll_interval: Seconds between checks.
     """
     return waiters.wait_for_first_metrics(
+        registry,
+        RESULTS_DIR,
+        run_id,
+        float(timeout),
+        float(poll_interval),
+    )
+
+
+# Long-lived blocker — used for automated chaining of training runs
+
+
+@mcp.tool()
+def wait_for_completion(
+    run_id: str,
+    timeout: int = 14400,
+    poll_interval: int = 60,
+) -> dict[str, Any]:
+    """Block until a training run finishes. Use this to chain runs automatically: start skill A, wait_for_completion, then start skill B. This WILL freeze the conversation until training ends or timeout. Default timeout is 4 hours.
+
+    Args:
+        run_id: The run to wait for.
+        timeout: Max seconds to wait (default 14400 = 4 hours).
+        poll_interval: Seconds between internal status checks (default 60).
+    """
+    return waiters.wait_for_completion(
         registry,
         RESULTS_DIR,
         run_id,

@@ -175,6 +175,74 @@ def wait_for_first_metrics(
     return _timeout_result(run_id, timeout, "first metrics")
 
 
+# ── Long-lived blocker (used for chaining runs) ───────────────────────
+
+
+def wait_for_completion(
+    registry: RunRegistry,
+    results_dir: Path,
+    run_id: str,
+    timeout: float = 14400.0,
+    poll_interval: float = 60.0,
+) -> dict[str, Any]:
+    """Block until a training run finishes (completed, failed, or stopped).
+
+    Designed for automated chaining: start skill A → wait_for_completion → start skill B.
+    Polls the process status (not TensorBoard) so it detects completion immediately.
+    Default timeout is 4 hours.
+    """
+    err = _check_run_exists(registry, run_id)
+    if err:
+        return err
+
+    deadline = time.monotonic() + timeout
+
+    while time.monotonic() < deadline:
+        info = registry.get(run_id)
+        if not info:
+            return {"error": f"Run '{run_id}' disappeared from registry."}
+
+        if info.status != RunStatus.RUNNING:
+            # Training finished — gather final info
+            result: dict[str, Any] = {
+                "run_id": run_id,
+                "completed": info.status == RunStatus.COMPLETED,
+                "status": info.status.value,
+                "return_code": info.return_code,
+            }
+
+            metrics = metrics_reader.read_metrics(
+                results_dir,
+                run_id,
+                metric_keys=["Environment/Cumulative Reward"],
+                last_n=5,
+            )
+            reward_points = metrics.get("Environment/Cumulative Reward", [])
+            if reward_points:
+                result["final_reward"] = round(reward_points[-1].value, 4)
+                result["final_step"] = reward_points[-1].step
+                result["reward_trend"] = [
+                    {"step": p.step, "value": round(p.value, 4)} for p in reward_points
+                ]
+
+            result["last_logs"] = list(info.log_buffer)[-15:]
+            return result
+
+        time.sleep(poll_interval)
+
+    # Timeout — return current progress
+    info = registry.get(run_id)
+    result_timeout = _timeout_result(run_id, timeout, "training completion")
+    if info:
+        result_timeout["status"] = info.status.value
+        reward_points, current_step, current_reward = _get_current_progress(
+            results_dir, run_id
+        )
+        result_timeout["current_step"] = current_step
+        result_timeout["current_reward"] = round(current_reward, 4)
+    return result_timeout
+
+
 # ── Instant checks (never block) ──────────────────────────────────────
 
 
