@@ -95,7 +95,7 @@ The server reads its configuration from environment variables. Add them to your 
 | `MLAGENTS_CONDA_ENV` | — | Conda environment name to activate before running `mlagents-learn` |
 | `MLAGENTS_CONDA_PATH` | — | Path to conda installation (e.g. `/home/user/miniconda3`) |
 
-## Tools (16)
+## Tools (18)
 
 ### Training control
 
@@ -104,6 +104,7 @@ The server reads its configuration from environment variables. Add them to your 
 | `force_training` | Launch a new training run (overwrites previous results). Blocks until ready by default. |
 | `stop_training` | Gracefully stop a run (SIGINT, saves the model). |
 | `resume_training` | Resume from checkpoint. Auto-reads config from previous run. |
+| `cleanup_processes` | Kill orphaned mlagents-learn and Unity build processes not tracked by any active run. |
 
 ### Monitoring
 
@@ -133,12 +134,13 @@ The server reads its configuration from environment variables. Add them to your 
 | Tool | Default | Description |
 |------|---------|-------------|
 | `wait_for_first_metrics` | Blocks | Blocks until first TensorBoard data point appears (~1-2 min). |
+| `wait_for_completion` | Blocks | Blocks until training finishes. For automated run chaining (up to 4 hours). |
 | `check_step` | Instant | Check if training reached a target step. Returns current progress. |
 | `check_reward` | Instant | Check if mean reward reached a target. Returns current reward. |
 | `check_completion` | Instant | Check if training finished. Returns current status and progress. |
 | `check_checkpoint` | Instant | Check if new .onnx files appeared. Returns checkpoint list. |
 
-The `check_*` tools **always return instantly** — they never block the conversation.
+The `check_*` tools **always return instantly** — they never block the conversation. Use `wait_for_completion` when you want to block until a run finishes (e.g. to chain skill A → skill B automatically).
 
 ## Two training modes
 
@@ -173,13 +175,13 @@ A typical automated training session:
 ```
 1. force_training(config, run_id, ...)     # launch, blocks until ready
 2. wait_for_first_metrics(run_id)          # blocks until data flowing
-3. check_step(run_id, 500000)              # instant: returns current progress
-4. get_training_logs(run_id)               # quick: live stdout peek
-5. check_completion(run_id)                # instant: is it done yet?
-6. export_model(run_id)                    # find the .onnx file
+3. wait_for_completion(run_id)             # blocks until training ends (hours)
+4. export_model(run_id)                    # get checkpoint
+5. update_config(next_skill, init_path=..) # chain checkpoint to next skill
+6. [repeat from step 1 for next skill]
 ```
 
-Steps 1-2 block briefly during startup. Steps 3-5 are instant — call them whenever you want an update without freezing the conversation.
+Steps 1-2 block briefly during startup. Step 3 blocks for the full duration (hours) — use this for automated chaining. For manual monitoring, use `check_step`/`check_completion` instead of step 3.
 
 ## Development
 
@@ -201,7 +203,7 @@ uv run mlagents-mcp
 
 ```
 src/mlagents_mcp/
-  server.py            # FastMCP app, all 16 tool definitions, entry point
+  server.py            # FastMCP app, all 18 tool definitions, entry point
   process_manager.py   # Subprocess launch/stop, log capture, port assignment
   metrics_reader.py    # TensorBoard event file parsing
   config_manager.py    # YAML config read/write/deep-merge
