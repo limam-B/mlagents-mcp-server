@@ -43,3 +43,4 @@ class RunInfo:
     results_dir: Path | None = None
     env_path: str | None = None
     return_code: int | None = None
+    stop_requested: bool = False
